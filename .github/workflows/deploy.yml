@@ -1,6 +1,5 @@
 name: Deploy to production
 
-
 on:
   push:
     branches: [ "main" ]
@@ -17,7 +16,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::851725184489:user/github-ci
+          role-to-assume: arn:aws:iam::851725184489:oidc-provider/token.actions.githubusercontent.com
           aws-region: us-east-2
 
       - name: Login to Amazon ECR
