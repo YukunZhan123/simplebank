@@ -4,13 +4,12 @@ on:
   push:
     branches: [ "main" ]
 
-permissions:
-  id-token: write
-  contents: read
-
 jobs:
   build:
     name: Build image
+    permissions:
+      id-token: write
+      contents: write
     runs-on: ubuntu-latest
 
     steps:
