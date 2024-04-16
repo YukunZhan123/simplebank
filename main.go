@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"net"
 	"net/http"
 	"os"
@@ -11,18 +10,22 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/hibiken/asynq"
 	"github.com/rakyll/statik/fs"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	db "github.com/yukunzhan/simplebank/db/sqlc"
 	_ "github.com/yukunzhan/simplebank/doc/statik"
 	"github.com/yukunzhan/simplebank/gapi"
+	"github.com/yukunzhan/simplebank/mail"
 	"github.com/yukunzhan/simplebank/pb"
 	"github.com/yukunzhan/simplebank/util"
+	"github.com/yukunzhan/simplebank/worker"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -35,18 +38,28 @@ func main() {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 
-	conn, err := sql.Open(config.DBDriver, config.DBSource)
+	// conn, err := sql.Open(config.DBDriver, config.DBSource)
+	// if err != nil {
+	// 	log.Fatal().Err(err).Msg("cannot connect to db")
+	// }
+
+	connPool, err := pgxpool.New(context.Background(), config.DBSource)
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot connect to db")
 	}
-
 	runDBMigration(config.MigrationURL, config.DBSource)
 
-	store := db.NewStore(conn)
+	store := db.NewStore(connPool)
 
+	redisOpt := asynq.RedisClientOpt{
+		Addr: config.RedisAddress,
+	}
+
+	taskDistributor := worker.NewRedisTaskDistributor(redisOpt)
+	go runTaskProcessor(config, redisOpt, store)
 	// runGinServer(config, store)
-	go runGatewayServer(config, store)
-	runGrpcServer(config, store)
+	go runGatewayServer(config, store, taskDistributor)
+	runGrpcServer(config, store, taskDistributor)
 
 }
 
@@ -63,6 +76,21 @@ func runDBMigration(migrationURL string, dbSource string) {
 	log.Info().Msg("db migrated successfully")
 }
 
+func runTaskProcessor(
+	config util.Config,
+	redisOpt asynq.RedisClientOpt,
+	store db.Store,
+) {
+	mailer := mail.NewGmailSender(config.EmailSenderName, config.EmailSenderAddress, config.EmailSenderPassword)
+	taskProcessor := worker.NewRedisTaskProcessor(redisOpt, store, mailer)
+
+	log.Info().Msg("start task processor")
+	err := taskProcessor.Start()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to start task processor")
+	}
+}
+
 // func runGinServer(config util.Config, store db.Store) {
 // 	server, err := api.NewServer(config, store)
 // 	if err != nil {
@@ -75,8 +103,8 @@ func runDBMigration(migrationURL string, dbSource string) {
 // 	}
 // }
 
-func runGrpcServer(config util.Config, store db.Store) {
-	server, err := gapi.NewServer(config, store)
+func runGrpcServer(config util.Config, store db.Store, taskDistributor worker.TaskDistributor) {
+	server, err := gapi.NewServer(config, store, taskDistributor)
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot create server")
 	}
@@ -97,8 +125,8 @@ func runGrpcServer(config util.Config, store db.Store) {
 	}
 }
 
-func runGatewayServer(config util.Config, store db.Store) {
-	server, err := gapi.NewServer(config, store)
+func runGatewayServer(config util.Config, store db.Store, taskDistributor worker.TaskDistributor) {
+	server, err := gapi.NewServer(config, store, taskDistributor)
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot create server")
 	}

@@ -1,11 +1,11 @@
 postgres:
-	docker run --name postgres12 -p 5432:5432 -e POSTGRES_PASSWORD=clky9912 -d postgres:12-alpine
+	docker run --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=clky9912 -d postgres:12-alpine
 
 createdb:
-	docker exec -it postgres12 createdb --username=postgres --owner=postgres -U postgres simple_bank
+	docker exec -it postgres createdb --username=postgres --owner=postgres -U postgres simple_bank
 
 dropdb:
-	docker exec -it postgres12 dropdb -U postgres simple_bank
+	docker exec -it postgres dropdb -U postgres simple_bank
 
 migrateup:
 	migrate -path db/migration -database "postgresql://postgres:clky9912@localhost:5432/simple_bank?sslmode=disable" -verbose up
@@ -29,13 +29,14 @@ sqlc:
 	sqlc generate
 
 test:
-	go test -v -cover ./...
+	go test -v -cover -short ./...
 
 server:
 	go run main.go
 
 mock:
 	mockgen -destination db/mock/store.go -package mockdb github.com/yukunzhan/simplebank/db/sqlc Store
+	mockgen -destination worker/mock/distributor.go -package mockwk github.com/yukunzhan/simplebank/worker TaskDistributor
 
 proto:
 	rm -f pb/*.go
@@ -50,4 +51,7 @@ proto:
 evans:
 	evans -r repl
 
-.PHONY: postgres createdb dropdb migrateup migratedown migrateup1 migratedown1 sqlc test server mock db_docs db_schema proto evans
+redis: 
+	docker run --name redis -p 6379:6379 -d redis:7-alpine
+
+.PHONY: postgres createdb dropdb migrateup migratedown migrateup1 migratedown1 sqlc test server mock db_docs db_schema proto evans redis
